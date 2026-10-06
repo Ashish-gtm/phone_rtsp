@@ -11,6 +11,7 @@ import android.hardware.camera2.CaptureRequest
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Base64
@@ -48,6 +49,19 @@ private class EncodedStream(
     @Volatile var pps: ByteArray? = null
     @Volatile var enabled = true
     var drainThread: Thread? = null
+
+    fun requestSyncFrame() {
+        if (!enabled) return
+        try {
+            codec?.setParameters(
+                Bundle().apply {
+                    putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+                }
+            )
+        } catch (error: Exception) {
+            Log.w("PhoneRtspStreamer", "Could not request a new H.264 keyframe.", error)
+        }
+    }
 }
 
 internal class RtspCameraStreamer(
@@ -805,6 +819,7 @@ private class RtspServer(
                 val requestUrl = parts[1]
                 val cseq = headers["cseq"] ?: "1"
                 if (!client.isAuthorized(method, requestUrl, headers["authorization"])) {
+                    Log.i(TAG, "$method rejected: authentication required")
                     client.respond(
                         cseq,
                         401,
@@ -813,6 +828,7 @@ private class RtspServer(
                     )
                     continue
                 }
+                Log.i(TAG, "$method ${pathOf(requestUrl) ?: requestUrl}")
                 when (method) {
                     "OPTIONS" -> client.respond(
                         cseq,
@@ -866,7 +882,6 @@ private class RtspServer(
                         if (!client.isSetup) {
                             client.respond(cseq, 454, "Session Not Found")
                         } else {
-                            client.playing = true
                             client.respond(
                                 cseq,
                                 200,
@@ -877,6 +892,8 @@ private class RtspServer(
                                     "RTP-Info" to "url=${requestUrl.trimEnd('/')}/trackID=0;seq=${client.sequence}"
                                 )
                             )
+                            client.stream?.requestSyncFrame()
+                            client.playing = true
                         }
                     }
                     "PAUSE" -> {
@@ -898,7 +915,10 @@ private class RtspServer(
                     else -> client.respond(cseq, 405, "Method Not Allowed")
                 }
             }
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            if (running && !socket.isClosed) {
+                Log.w(TAG, "RTSP client connection failed.", error)
+            }
         } finally {
             clients.remove(client)
             client.close()
@@ -1140,5 +1160,6 @@ private class RtspServer(
     companion object {
         private const val PORT = 8554
         private const val REALM = "Phone RTSP"
+        private const val TAG = "PhoneRtspServer"
     }
 }
