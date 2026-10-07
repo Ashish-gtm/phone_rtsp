@@ -522,7 +522,7 @@ internal class OverlayRenderer(
     companion object {
         private const val TAG = "PhoneRtspStreamer"
         private const val EGL_RECORDABLE_ANDROID = 0x3142
-        private const val LABEL_TEXT_HEIGHT_RATIO = 0.05f
+        private const val LABEL_TEXT_HEIGHT_RATIO = 0.045f
         private const val LABEL_MARGIN_RATIO = 0.025f
         private const val LABEL_HORIZONTAL_PADDING_RATIO = 0.025f
         private const val LABEL_VERTICAL_PADDING_RATIO = 0.012f
