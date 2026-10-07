@@ -47,6 +47,7 @@ internal class EncodedStream(
     val bitRate: Int
 ) {
     var codec: MediaCodec? = null
+    var codecName: String? = null
     var surface: Surface? = null
     @Volatile var sps: ByteArray? = null
     @Volatile var pps: ByteArray? = null
@@ -259,6 +260,12 @@ internal class RtspCameraStreamer(
         }
         streams = if (subStream == null) listOf(mainStream) else listOf(mainStream, subStream)
         streams.forEach { stream ->
+            Log.i(
+                TAG,
+                "Prepared ${stream.path} encoder ${stream.codecName ?: "unknown"} at " +
+                    "${stream.width}x${stream.height}, ${stream.frameRate} FPS, " +
+                    "${stream.bitRate} bps."
+            )
             stream.drainThread = Thread(
                 { drainEncoder(stream) },
                 "rtsp-encoder-${stream.path.substring(1)}"
@@ -333,6 +340,7 @@ internal class RtspCameraStreamer(
                 }
             }
             stream.surface = codec.createInputSurface()
+            stream.codecName = codec.name
             codec.start()
         } catch (error: Exception) {
             stream.surface?.release()
@@ -506,6 +514,9 @@ internal class RtspCameraStreamer(
 
     private fun drainEncoder(stream: EncodedStream) {
         val info = MediaCodec.BufferInfo()
+        var loggedFrames = 0
+        var loggedBytes = 0L
+        var logWindowStartedAt = System.nanoTime()
         while (streaming && stream.enabled) {
             val codec = stream.codec ?: break
             try {
@@ -524,6 +535,8 @@ internal class RtspCameraStreamer(
                             buffer.get(bytes)
                             val nals = splitNals(bytes)
                             if (nals.isNotEmpty()) {
+                                loggedFrames++
+                                loggedBytes += bytes.size
                                 server?.sendAccessUnit(
                                     stream,
                                     nals,
@@ -534,6 +547,19 @@ internal class RtspCameraStreamer(
                         }
                         codec.releaseOutputBuffer(index, false)
                     }
+                }
+                val now = System.nanoTime()
+                if (now - logWindowStartedAt >= ENCODER_LOG_INTERVAL_NS) {
+                    val elapsedSeconds = (now - logWindowStartedAt) / 1_000_000_000.0
+                    Log.i(
+                        TAG,
+                        "${stream.path} encoder ${stream.codecName ?: "unknown"}: " +
+                            "${"%.1f".format(java.util.Locale.US, loggedFrames / elapsedSeconds)} FPS, " +
+                            "$loggedBytes bytes in ${"%.1f".format(java.util.Locale.US, elapsedSeconds)}s."
+                    )
+                    loggedFrames = 0
+                    loggedBytes = 0
+                    logWindowStartedAt = now
                 }
             } catch (error: Exception) {
                 if (streaming && stream.enabled) {
@@ -600,13 +626,80 @@ internal class RtspCameraStreamer(
                 index++
             }
         }
-        if (starts.isEmpty()) return if (data.isNotEmpty()) listOf(data) else emptyList()
+        if (starts.isEmpty()) {
+            val configurationNals = parseAvcConfigurationRecord(data)
+            if (configurationNals.isNotEmpty()) return configurationNals
+            val lengthPrefixedNals = parseLengthPrefixedNals(data)
+            if (lengthPrefixedNals.isNotEmpty()) return lengthPrefixedNals
+            return if (data.isNotEmpty()) listOf(data) else emptyList()
+        }
 
         return starts.mapIndexedNotNull { position, item ->
             val start = item.first + item.second
             val end = if (position + 1 < starts.size) starts[position + 1].first else data.size
             if (start < end) data.copyOfRange(start, end) else null
         }
+    }
+
+    private fun parseLengthPrefixedNals(data: ByteArray): List<ByteArray> {
+        for (lengthBytes in intArrayOf(4, 2, 1)) {
+            val result = ArrayList<ByteArray>()
+            var offset = 0
+            var valid = true
+            while (offset < data.size) {
+                if (offset + lengthBytes > data.size) {
+                    valid = false
+                    break
+                }
+                var nalLength = 0
+                repeat(lengthBytes) { index ->
+                    nalLength = (nalLength shl 8) or (data[offset + index].toInt() and 0xff)
+                }
+                offset += lengthBytes
+                if (nalLength <= 0 || offset + nalLength > data.size) {
+                    valid = false
+                    break
+                }
+                val nal = data.copyOfRange(offset, offset + nalLength)
+                val nalType = nal[0].toInt() and 0x1f
+                if (nalType !in 1..23) {
+                    valid = false
+                    break
+                }
+                result.add(nal)
+                offset += nalLength
+            }
+            if (valid && offset == data.size && result.isNotEmpty()) return result
+        }
+        return emptyList()
+    }
+
+    private fun parseAvcConfigurationRecord(data: ByteArray): List<ByteArray> {
+        if (data.size < 7 || data[0].toInt() != 1) return emptyList()
+        val nals = ArrayList<ByteArray>()
+        var offset = 6
+        val sequenceParameterSets = data[5].toInt() and 0x1f
+        repeat(sequenceParameterSets) {
+            if (offset + 2 > data.size) return emptyList()
+            val length = ((data[offset].toInt() and 0xff) shl 8) or
+                (data[offset + 1].toInt() and 0xff)
+            offset += 2
+            if (length <= 0 || offset + length > data.size) return emptyList()
+            nals.add(data.copyOfRange(offset, offset + length))
+            offset += length
+        }
+        if (offset >= data.size) return nals
+        val pictureParameterSets = data[offset++].toInt() and 0xff
+        repeat(pictureParameterSets) {
+            if (offset + 2 > data.size) return emptyList()
+            val length = ((data[offset].toInt() and 0xff) shl 8) or
+                (data[offset + 1].toInt() and 0xff)
+            offset += 2
+            if (length <= 0 || offset + length > data.size) return emptyList()
+            nals.add(data.copyOfRange(offset, offset + length))
+            offset += length
+        }
+        return nals
     }
 
     private fun updateReadyState() {
@@ -717,6 +810,7 @@ internal class RtspCameraStreamer(
         private const val SUB_MAX_HEIGHT = 480
         private const val SUB_BIT_RATE = 1_000_000
         private const val SUB_ASPECT_RATIO_TOLERANCE = 0.01
+        private const val ENCODER_LOG_INTERVAL_NS = 5_000_000_000L
         private const val TAG = "PhoneRtspStreamer"
         private val SUPPORTED_MAIN_SIZES = setOf(1920 to 1080, 1280 to 720, 640 to 480)
         private val SUPPORTED_FRAME_RATES = setOf(10, 15, 20, 25, 30)
