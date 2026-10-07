@@ -58,8 +58,11 @@ internal class OverlayRenderer(
     @Volatile private var stopped = false
     private var lastLabelSecond = Long.MIN_VALUE
     private var label = ""
+    private var transformMatrixLogged = false
+    private var cameraWidth = 0
+    private var cameraHeight = 0
     private val transformMatrix = FloatArray(16)
-    private val fullscreenPositionBuffer = directFloatBuffer(FULLSCREEN_POSITIONS)
+    private val cameraPositionBuffer = directFloatBuffer(FloatArray(8))
     private val fullscreenTextureBuffer = directFloatBuffer(FULLSCREEN_TEX_COORDS)
     private val labelPositionBuffer = directFloatBuffer(FloatArray(8))
     private val labelTextureBuffer = directFloatBuffer(LABEL_TEX_COORDS)
@@ -68,6 +71,13 @@ internal class OverlayRenderer(
         get() = cameraSurface ?: error("The overlay camera surface is not initialized.")
 
     fun start(cameraWidth: Int, cameraHeight: Int) {
+        this.cameraWidth = cameraWidth
+        this.cameraHeight = cameraHeight
+        Log.i(
+            TAG,
+            "Overlay camera buffer=${cameraWidth}x$cameraHeight; outputs=" +
+                streams.joinToString { "${it.path}=${it.width}x${it.height}" }
+        )
         glThread.start()
         glHandler = Handler(glThread.looper)
         try {
@@ -226,6 +236,10 @@ internal class OverlayRenderer(
             val texture = cameraTextureSurface ?: return
             texture.updateTexImage()
             texture.getTransformMatrix(transformMatrix)
+            if (!transformMatrixLogged) {
+                Log.i(TAG, "SurfaceTexture transform matrix=${transformMatrix.joinToString()}")
+                transformMatrixLogged = true
+            }
             updateLabel()
             val timestamp = texture.timestamp.takeIf { it > 0L } ?: System.nanoTime()
             outputs.forEach { output ->
@@ -233,7 +247,7 @@ internal class OverlayRenderer(
                 GLES20.glViewport(0, 0, output.stream.width, output.stream.height)
                 GLES20.glClearColor(0f, 0f, 0f, 1f)
                 GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-                drawCamera()
+                drawCamera(output.stream)
                 drawLabel(output)
                 check(
                     EGLExt.eglPresentationTimeANDROID(display, output.eglSurface, timestamp)
@@ -267,13 +281,26 @@ internal class OverlayRenderer(
             "$percent%  ${if (charging) "Charging" else "Not charging"}"
     }
 
-    private fun drawCamera() {
+    private fun drawCamera(stream: EncodedStream) {
         GLES20.glUseProgram(cameraProgram)
         val position = GLES20.glGetAttribLocation(cameraProgram, "aPosition")
         val texCoord = GLES20.glGetAttribLocation(cameraProgram, "aTexCoord")
         val matrix = GLES20.glGetUniformLocation(cameraProgram, "uTextureMatrix")
         val sampler = GLES20.glGetUniformLocation(cameraProgram, "uTexture")
-        fullscreenPositionBuffer.position(0)
+        val sourceAspect = cameraWidth.toFloat() / cameraHeight
+        val outputAspect = stream.width.toFloat() / stream.height
+        val halfWidth = if (sourceAspect > outputAspect) 1f else sourceAspect / outputAspect
+        val halfHeight = if (sourceAspect > outputAspect) outputAspect / sourceAspect else 1f
+        cameraPositionBuffer.clear()
+        cameraPositionBuffer.put(-halfWidth)
+        cameraPositionBuffer.put(-halfHeight)
+        cameraPositionBuffer.put(halfWidth)
+        cameraPositionBuffer.put(-halfHeight)
+        cameraPositionBuffer.put(-halfWidth)
+        cameraPositionBuffer.put(halfHeight)
+        cameraPositionBuffer.put(halfWidth)
+        cameraPositionBuffer.put(halfHeight)
+        cameraPositionBuffer.position(0)
         GLES20.glEnableVertexAttribArray(position)
         GLES20.glVertexAttribPointer(
             position,
@@ -281,7 +308,7 @@ internal class OverlayRenderer(
             GLES20.GL_FLOAT,
             false,
             0,
-            fullscreenPositionBuffer
+            cameraPositionBuffer
         )
         fullscreenTextureBuffer.position(0)
         GLES20.glEnableVertexAttribArray(texCoord)
@@ -293,7 +320,7 @@ internal class OverlayRenderer(
             0,
             fullscreenTextureBuffer
         )
-        GLES20.glUniformMatrix4fv(matrix, 1, false, transformMatrix, 0)
+        GLES20.glUniformMatrix4fv(matrix, 1, false, RAW_BUFFER_TEXTURE_MATRIX, 0)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, cameraTexture)
         GLES20.glUniform1i(sampler, 0)
@@ -499,10 +526,14 @@ internal class OverlayRenderer(
         private const val LABEL_MARGIN_RATIO = 0.025f
         private const val LABEL_HORIZONTAL_PADDING_RATIO = 0.025f
         private const val LABEL_VERTICAL_PADDING_RATIO = 0.012f
-        private val FULLSCREEN_POSITIONS =
-            floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f)
         private val FULLSCREEN_TEX_COORDS =
-            floatArrayOf(0f, 1f, 1f, 1f, 0f, 0f, 1f, 0f)
+            floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f)
+        private val RAW_BUFFER_TEXTURE_MATRIX = floatArrayOf(
+            1f, 0f, 0f, 0f,
+            0f, -1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 1f, 0f, 1f
+        )
         private val LABEL_TEX_COORDS =
             floatArrayOf(0f, 1f, 1f, 1f, 0f, 0f, 1f, 0f)
         private const val CAMERA_VERTEX_SHADER = """

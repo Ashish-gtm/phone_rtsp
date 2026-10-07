@@ -177,6 +177,18 @@ internal class RtspCameraStreamer(
     private fun prepareEncoders() {
         val cameraId = findCameraId()
         val characteristics = cameraManager().getCameraCharacteristics(cameraId)
+        val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION)
+        val cameraFacing = when (
+            characteristics.get(CameraCharacteristics.LENS_FACING)
+        ) {
+            CameraCharacteristics.LENS_FACING_FRONT -> "front"
+            CameraCharacteristics.LENS_FACING_BACK -> "back"
+            else -> "external/unknown"
+        }
+        Log.i(
+            TAG,
+            "Camera id=$cameraId facing=$cameraFacing sensorOrientation=$sensorOrientation degrees."
+        )
         val map = characteristics.get(
             CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP
         ) ?: throw IllegalStateException("This camera does not expose a video output.")
