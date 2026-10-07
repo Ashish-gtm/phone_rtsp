@@ -13,6 +13,7 @@ import android.hardware.camera2.CaptureRequest
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
@@ -185,10 +186,21 @@ internal class RtspCameraStreamer(
             ?: throw IllegalStateException(
                 "This camera does not support ${mainWidth} × $mainHeight video output."
             )
-        val subSize = supportedSizes
-            .filter { it.width <= SUB_MAX_WIDTH && it.height <= SUB_MAX_HEIGHT }
+        val substreamSizes = supportedSizes
+            .filter { it.width <= SUB_MAX_WIDTH }
             .filter { it.width * it.height < size.width * size.height }
+        val mainAspectRatio = size.width.toDouble() / size.height
+        val subSize = substreamSizes
+            .filter {
+                val subAspectRatio = it.width.toDouble() / it.height
+                abs(subAspectRatio - mainAspectRatio) / mainAspectRatio <=
+                    SUB_ASPECT_RATIO_TOLERANCE
+            }
             .maxByOrNull { it.width * it.height }
+            ?: supportedSizes
+                .filter { it.width <= SUB_MAX_WIDTH && it.height <= SUB_MAX_HEIGHT }
+                .filter { it.width * it.height < size.width * size.height }
+                .maxByOrNull { it.width * it.height }
 
         val mainStream = createEncoder(
             "/live",
@@ -206,13 +218,19 @@ internal class RtspCameraStreamer(
             Log.w(TAG, warning)
             null
         } else try {
+            Log.i(
+                TAG,
+                "Starting /sub encoder at ${subSize.width}x${subSize.height}, " +
+                    "$mainFrameRate FPS, $SUB_BIT_RATE bps."
+            )
             createEncoder(
                 "/sub",
                 subSize.width,
                 subSize.height,
-                SUB_FRAME_RATE,
+                mainFrameRate,
                 SUB_BIT_RATE,
-                iFrameIntervalSeconds = 1
+                iFrameIntervalSeconds = 1,
+                lowLatency = true
             )
         } catch (error: Exception) {
             val warning =
@@ -237,7 +255,8 @@ internal class RtspCameraStreamer(
         height: Int,
         frameRate: Int,
         bitRate: Int,
-        iFrameIntervalSeconds: Int
+        iFrameIntervalSeconds: Int,
+        lowLatency: Boolean = false
     ): EncodedStream {
         val stream = EncodedStream(path, width, height, frameRate, bitRate)
         fun createFormat(useCompatibilityHints: Boolean) =
@@ -262,6 +281,9 @@ internal class RtspCameraStreamer(
                         MediaFormat.KEY_BITRATE_MODE,
                         MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
                     )
+                    if (lowLatency && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                    }
                 }
             }
         var codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
@@ -459,7 +481,6 @@ internal class RtspCameraStreamer(
 
     private fun drainEncoder(stream: EncodedStream) {
         val info = MediaCodec.BufferInfo()
-        var lastSubFrameUs = Long.MIN_VALUE
         while (streaming && stream.enabled) {
             val codec = stream.codec ?: break
             try {
@@ -477,12 +498,7 @@ internal class RtspCameraStreamer(
                             val bytes = ByteArray(buffer.remaining())
                             buffer.get(bytes)
                             val nals = splitNals(bytes)
-                            val frameIntervalUs = 1_000_000L / stream.frameRate
-                            val shouldSend = stream.path != "/sub" ||
-                                lastSubFrameUs == Long.MIN_VALUE ||
-                                info.presentationTimeUs - lastSubFrameUs >= frameIntervalUs
-                            if (nals.isNotEmpty() && shouldSend) {
-                                lastSubFrameUs = info.presentationTimeUs
+                            if (nals.isNotEmpty()) {
                                 server?.sendAccessUnit(
                                     stream,
                                     nals,
@@ -672,8 +688,8 @@ internal class RtspCameraStreamer(
         private const val MAX_BIT_RATE = 4_000_000
         private const val SUB_MAX_WIDTH = 640
         private const val SUB_MAX_HEIGHT = 480
-        private const val SUB_FRAME_RATE = 10
         private const val SUB_BIT_RATE = 1_000_000
+        private const val SUB_ASPECT_RATIO_TOLERANCE = 0.01
         private const val TAG = "PhoneRtspStreamer"
         private val SUPPORTED_MAIN_SIZES = setOf(1920 to 1080, 1280 to 720, 640 to 480)
         private val SUPPORTED_FRAME_RATES = setOf(10, 15, 20, 25, 30)
