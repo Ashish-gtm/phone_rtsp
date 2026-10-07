@@ -73,8 +73,6 @@ internal class RtspCameraStreamer(
     @Volatile private var streaming = false
     @Volatile private var frontCamera = false
     @Volatile private var serverReady = false
-    @Volatile private var onvifReady = false
-    @Volatile private var onvifEnabled = false
     @Volatile private var cameraReady = false
     @Volatile private var lastError: String? = null
     @Volatile private var substreamWarning: String? = null
@@ -89,7 +87,6 @@ internal class RtspCameraStreamer(
     private var captureSession: CameraCaptureSession? = null
     private var streams = emptyList<EncodedStream>()
     private var server: RtspServer? = null
-    private var onvifServer: OnvifServer? = null
 
     @Synchronized
     fun start(
@@ -99,8 +96,7 @@ internal class RtspCameraStreamer(
         width: Int,
         height: Int,
         frameRate: Int,
-        bitRate: Int,
-        enableOnvif: Boolean
+        bitRate: Int
     ) {
         if (streaming) return
         require((width to height) in SUPPORTED_MAIN_SIZES) {
@@ -119,8 +115,6 @@ internal class RtspCameraStreamer(
         mainFrameRate = frameRate
         mainBitRate = bitRate
         serverReady = false
-        onvifReady = false
-        onvifEnabled = enableOnvif
         cameraReady = false
         lastError = null
         substreamWarning = null
@@ -140,20 +134,6 @@ internal class RtspCameraStreamer(
                 username = username,
                 password = password,
             ).also { it.start() }
-            if (enableOnvif) {
-                onvifServer = OnvifServer(
-                    context = context,
-                    onListening = {
-                        onvifReady = true
-                        updateReadyState()
-                    },
-                    onFailure = { message -> fail(message) },
-                    streamProvider = { streams },
-                    addressProvider = { localIpv4Address() },
-                    username = username,
-                    password = password
-                ).also { it.start() }
-            }
             openCamera()
         } catch (error: Exception) {
             cleanup()
@@ -177,7 +157,7 @@ internal class RtspCameraStreamer(
         "state" to when {
             lastError != null -> "error"
             !streaming -> "stopped"
-            serverReady && (!onvifEnabled || onvifReady) && cameraReady -> "live"
+            serverReady && cameraReady -> "live"
             else -> "starting"
         },
         "message" to (lastError ?: substreamWarning),
@@ -589,9 +569,7 @@ internal class RtspCameraStreamer(
     }
 
     private fun updateReadyState() {
-        if (streaming && serverReady && (!onvifEnabled || onvifReady) && cameraReady) {
-            emit("live", substreamWarning)
-        }
+        if (streaming && serverReady && cameraReady) emit("live", substreamWarning)
     }
 
     private fun fail(message: String) {
@@ -604,9 +582,6 @@ internal class RtspCameraStreamer(
 
     @Synchronized
     private fun cleanup() {
-        onvifServer?.stop()
-        onvifServer = null
-        onvifReady = false
         server?.stop()
         server = null
         cameraReady = false
