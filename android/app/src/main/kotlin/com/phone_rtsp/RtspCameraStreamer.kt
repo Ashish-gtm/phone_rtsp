@@ -87,6 +87,7 @@ internal class RtspCameraStreamer(
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var streams = emptyList<EncodedStream>()
+    private var overlayRenderer: OverlayRenderer? = null
     private var server: RtspServer? = null
 
     @Synchronized
@@ -125,6 +126,9 @@ internal class RtspCameraStreamer(
             cameraThread = HandlerThread("rtsp-camera").also { it.start() }
             cameraHandler = Handler(cameraThread!!.looper)
             prepareEncoders()
+            overlayRenderer = OverlayRenderer(context, streams) { message ->
+                fail(message)
+            }.also { it.start(mainWidth, mainHeight) }
             server = RtspServer(
                 onListening = {
                     serverReady = true
@@ -176,9 +180,10 @@ internal class RtspCameraStreamer(
         val map = characteristics.get(
             CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP
         ) ?: throw IllegalStateException("This camera does not expose a video output.")
-        val supportedSizes = map.getOutputSizes(MediaCodec::class.java)
-            ?: map.getOutputSizes(SurfaceTexture::class.java)
-            ?: map.getOutputSizes(ImageFormat.PRIVATE)
+        val supportedSizes = map.getOutputSizes(SurfaceTexture::class.java)
+            ?.takeIf { it.isNotEmpty() }
+            ?: map.getOutputSizes(MediaCodec::class.java)?.takeIf { it.isNotEmpty() }
+            ?: map.getOutputSizes(ImageFormat.PRIVATE)?.takeIf { it.isNotEmpty() }
             ?: throw IllegalStateException("Unable to read supported camera resolutions.")
         val size = supportedSizes.firstOrNull {
             it.width == mainWidth && it.height == mainHeight
@@ -382,11 +387,12 @@ internal class RtspCameraStreamer(
         targetStreams: List<EncodedStream>
     ) {
         val handler = cameraHandler ?: return
-        val outputs = targetStreams.mapNotNull { it.surface }
-        if (outputs.size != targetStreams.size || outputs.isEmpty()) {
-            fail("A video encoder surface is unavailable.")
+        val cameraSurface = overlayRenderer?.inputSurface
+        if (cameraSurface == null || targetStreams.isEmpty()) {
+            fail("The OpenGL camera input surface is unavailable.")
             return
         }
+        val outputs = listOf(cameraSurface)
         try {
             camera.createCaptureSession(
                 outputs,
@@ -459,8 +465,15 @@ internal class RtspCameraStreamer(
         }
         substreamWarning = "Main stream is live, but the substream is unavailable: $reason"
         Log.w(TAG, substreamWarning ?: reason)
+        val remainingStreams = streams.filterNot { it === substream }
+        try {
+            overlayRenderer?.setStreams(remainingStreams)
+        } catch (error: Exception) {
+            fail(error.message ?: "Unable to remove the failed substream output.")
+            return
+        }
         server?.removeStream("/sub")
-        streams = streams.filterNot { it === substream }
+        streams = remainingStreams
         releaseStream(substream)
         cameraHandler?.post {
             if (streaming) configureCaptureSession(camera, streams)
@@ -610,6 +623,8 @@ internal class RtspCameraStreamer(
         captureSession = null
         cameraDevice?.close()
         cameraDevice = null
+        overlayRenderer?.stop()
+        overlayRenderer = null
         streams.forEach(::releaseStream)
         streams = emptyList()
         cameraThread?.quitSafely()
