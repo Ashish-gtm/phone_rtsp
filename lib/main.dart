@@ -45,6 +45,7 @@ class _StreamHomePageState extends State<StreamHomePage> {
   String? _message;
   String? _address;
   bool _frontCamera = false;
+  bool _onvifMode = false;
   bool _busy = false;
   bool _showPassword = false;
   String _resolution = '1920x1080';
@@ -128,6 +129,7 @@ class _StreamHomePageState extends State<StreamHomePage> {
           'height': int.parse(_resolution.split('x').last),
           'frameRate': _frameRate,
           'bitRate': (_bitrateMbps * 1000000).round(),
+          'onvif': _onvifMode,
         });
       }
       await _refreshStatus();
@@ -152,8 +154,15 @@ class _StreamHomePageState extends State<StreamHomePage> {
     if (_address == null) return;
     await Clipboard.setData(ClipboardData(text: url));
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('RTSP address copied')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          url.startsWith('http://')
+              ? 'ONVIF address copied'
+              : 'RTSP address copied',
+        ),
+      ),
+    );
   }
 
   InputDecoration _settingsDecoration(String label) => InputDecoration(
@@ -535,7 +544,7 @@ class _StreamHomePageState extends State<StreamHomePage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Row(
+                  Row(
                     children: [
                       Icon(
                         Icons.router_rounded,
@@ -544,7 +553,9 @@ class _StreamHomePageState extends State<StreamHomePage> {
                       ),
                       SizedBox(width: 8),
                       Text(
-                        'RTSP ADDRESSES',
+                        _onvifMode
+                            ? 'DVR CONNECTION DETAILS'
+                            : 'RTSP ADDRESSES',
                         style: TextStyle(
                           color: Color(0xFF8C9BAD),
                           letterSpacing: 1.2,
@@ -554,6 +565,46 @@ class _StreamHomePageState extends State<StreamHomePage> {
                       ),
                     ],
                   ),
+                  if (_onvifMode) ...[
+                    const SizedBox(height: 12),
+                    const Text(
+                      'ONVIF device service',
+                      style: TextStyle(
+                        color: Color(0xFF8C9BAD),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SelectableText(
+                            _address == null
+                                ? 'Waiting for Wi-Fi'
+                                : 'http://$_address:8080/onvif/device_service',
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Copy ONVIF service address',
+                          onPressed: _address == null
+                              ? null
+                              : () => _copyUrl(
+                                  'http://$_address:8080/onvif/device_service',
+                                ),
+                          icon: const Icon(Icons.copy_rounded, size: 19),
+                        ),
+                      ],
+                    ),
+                    const Text(
+                      'Use Auto Add/Search on the DVR. Both devices must be on the same LAN with multicast allowed. If search stays empty, try Add One with this URL.',
+                      style: TextStyle(color: Color(0xFF8C9BAD), fontSize: 12),
+                    ),
+                  ],
                   const SizedBox(height: 5),
                   const Text(
                     'Main stream',
@@ -649,6 +700,70 @@ class _StreamHomePageState extends State<StreamHomePage> {
                 ),
               ),
             ],
+            const SizedBox(height: 18),
+            Container(
+              padding: const EdgeInsets.fromLTRB(18, 17, 18, 18),
+              decoration: BoxDecoration(
+                color: const Color(0xFF121A23),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(
+                        Icons.settings_ethernet_rounded,
+                        size: 18,
+                        color: Color(0xFF8C9BAD),
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        'DVR CONNECTION MODE',
+                        style: TextStyle(
+                          color: Color(0xFF8C9BAD),
+                          letterSpacing: 1.2,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment<bool>(
+                        value: false,
+                        icon: Icon(Icons.link_rounded),
+                        label: Text('RTSP'),
+                      ),
+                      ButtonSegment<bool>(
+                        value: true,
+                        icon: Icon(Icons.device_hub_rounded),
+                        label: Text('ONVIF'),
+                      ),
+                    ],
+                    selected: {_onvifMode},
+                    onSelectionChanged: _isActive || _busy
+                        ? null
+                        : (selection) {
+                            setState(() => _onvifMode = selection.first);
+                          },
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    _onvifMode
+                        ? 'ONVIF discovery is enabled; video still uses RTSP. Discovery requires multicast between the phone and DVR.'
+                        : 'Use RTSP when entering the stream URLs manually in the DVR.',
+                    style: const TextStyle(
+                      color: Color(0xFF8C9BAD),
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 18),
             Row(
               children: [

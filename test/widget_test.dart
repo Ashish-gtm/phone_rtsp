@@ -35,5 +35,21 @@ void main() {
     expect(find.text('RTSP ADDRESSES'), findsOneWidget);
     expect(find.text('Main stream'), findsOneWidget);
     expect(find.text('Substream'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('DVR CONNECTION MODE'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('DVR CONNECTION MODE'), findsOneWidget);
+    expect(find.text('ONVIF'), findsOneWidget);
+    await tester.tap(find.text('ONVIF'));
+    await tester.pump();
+    expect(
+      find.text(
+        'ONVIF discovery is enabled; video still uses RTSP. Discovery requires multicast between the phone and DVR.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('ONVIF device service'), findsOneWidget);
   });
 }

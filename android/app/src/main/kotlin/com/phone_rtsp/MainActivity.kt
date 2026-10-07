@@ -17,6 +17,7 @@ class MainActivity : FlutterActivity() {
     private var pendingStart: MethodChannel.Result? = null
     private var pendingUsername = ""
     private var pendingPassword = ""
+    private var pendingOnvif = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -56,6 +57,7 @@ class MainActivity : FlutterActivity() {
                         call.argument<Int>("height") ?: 1080,
                         call.argument<Int>("frameRate") ?: 25,
                         call.argument<Int>("bitRate") ?: 4_000_000,
+                        call.argument<Boolean>("onvif") ?: false,
                         result
                     )
                     "stop" -> {
@@ -75,6 +77,7 @@ class MainActivity : FlutterActivity() {
         height: Int,
         frameRate: Int,
         bitRate: Int,
+        onvif: Boolean,
         result: MethodChannel.Result
     ) {
         if (username.isEmpty() != password.isEmpty()) {
@@ -88,7 +91,17 @@ class MainActivity : FlutterActivity() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
         ) {
-            startStream(frontCamera, username, password, width, height, frameRate, bitRate, result)
+            startStream(
+                frontCamera,
+                username,
+                password,
+                width,
+                height,
+                frameRate,
+                bitRate,
+                onvif,
+                result
+            )
             return
         }
 
@@ -104,6 +117,7 @@ class MainActivity : FlutterActivity() {
         pendingHeight = height
         pendingFrameRate = frameRate
         pendingBitRate = bitRate
+        pendingOnvif = onvif
         ActivityCompat.requestPermissions(
             this,
             arrayOf(Manifest.permission.CAMERA),
@@ -125,13 +139,23 @@ class MainActivity : FlutterActivity() {
         height: Int,
         frameRate: Int,
         bitRate: Int,
+        onvif: Boolean,
         result: MethodChannel.Result
     ) {
         try {
-            streamer.start(frontCamera, username, password, width, height, frameRate, bitRate)
+            streamer.start(
+                frontCamera,
+                username,
+                password,
+                width,
+                height,
+                frameRate,
+                bitRate,
+                onvif
+            )
             result.success(null)
         } catch (error: Exception) {
-            result.error("START_FAILED", error.message ?: "Unable to start the RTSP stream.", null)
+            result.error("START_FAILED", error.message ?: "Unable to start the camera service.", null)
         }
     }
 
@@ -155,6 +179,7 @@ class MainActivity : FlutterActivity() {
                 pendingHeight,
                 pendingFrameRate,
                 pendingBitRate,
+                pendingOnvif,
                 result
             )
         } else {
@@ -162,6 +187,7 @@ class MainActivity : FlutterActivity() {
         }
         pendingUsername = ""
         pendingPassword = ""
+        pendingOnvif = false
     }
 
     private fun status(state: String, message: String?): Map<String, Any?> =

@@ -1,6 +1,8 @@
 package com.phone_rtsp
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
@@ -18,9 +20,9 @@ import android.util.Base64
 import android.util.Log
 import android.util.Range
 import android.view.Surface
-import java.io.BufferedReader
+import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
 import java.io.IOException
-import java.io.InputStreamReader
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.Inet4Address
@@ -36,7 +38,7 @@ import java.security.SecureRandom
 import java.util.concurrent.CopyOnWriteArraySet
 import kotlin.math.abs
 
-private class EncodedStream(
+internal class EncodedStream(
     val path: String,
     val width: Int,
     val height: Int,
@@ -71,6 +73,8 @@ internal class RtspCameraStreamer(
     @Volatile private var streaming = false
     @Volatile private var frontCamera = false
     @Volatile private var serverReady = false
+    @Volatile private var onvifReady = false
+    @Volatile private var onvifEnabled = false
     @Volatile private var cameraReady = false
     @Volatile private var lastError: String? = null
     @Volatile private var substreamWarning: String? = null
@@ -85,6 +89,7 @@ internal class RtspCameraStreamer(
     private var captureSession: CameraCaptureSession? = null
     private var streams = emptyList<EncodedStream>()
     private var server: RtspServer? = null
+    private var onvifServer: OnvifServer? = null
 
     @Synchronized
     fun start(
@@ -94,7 +99,8 @@ internal class RtspCameraStreamer(
         width: Int,
         height: Int,
         frameRate: Int,
-        bitRate: Int
+        bitRate: Int,
+        enableOnvif: Boolean
     ) {
         if (streaming) return
         require((width to height) in SUPPORTED_MAIN_SIZES) {
@@ -113,6 +119,8 @@ internal class RtspCameraStreamer(
         mainFrameRate = frameRate
         mainBitRate = bitRate
         serverReady = false
+        onvifReady = false
+        onvifEnabled = enableOnvif
         cameraReady = false
         lastError = null
         substreamWarning = null
@@ -132,6 +140,20 @@ internal class RtspCameraStreamer(
                 username = username,
                 password = password,
             ).also { it.start() }
+            if (enableOnvif) {
+                onvifServer = OnvifServer(
+                    context = context,
+                    onListening = {
+                        onvifReady = true
+                        updateReadyState()
+                    },
+                    onFailure = { message -> fail(message) },
+                    streamProvider = { streams },
+                    addressProvider = { localIpv4Address() },
+                    username = username,
+                    password = password
+                ).also { it.start() }
+            }
             openCamera()
         } catch (error: Exception) {
             cleanup()
@@ -155,7 +177,7 @@ internal class RtspCameraStreamer(
         "state" to when {
             lastError != null -> "error"
             !streaming -> "stopped"
-            serverReady && cameraReady -> "live"
+            serverReady && (!onvifEnabled || onvifReady) && cameraReady -> "live"
             else -> "starting"
         },
         "message" to (lastError ?: substreamWarning),
@@ -238,23 +260,59 @@ internal class RtspCameraStreamer(
         iFrameIntervalSeconds: Int
     ): EncodedStream {
         val stream = EncodedStream(path, width, height, frameRate, bitRate)
-        val format = MediaFormat.createVideoFormat(
-            MediaFormat.MIMETYPE_VIDEO_AVC,
-            width,
-            height
-        ).apply {
-            setInteger(
-                MediaFormat.KEY_COLOR_FORMAT,
-                MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
-            )
-            setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
-            setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, iFrameIntervalSeconds)
-        }
-        val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        fun createFormat(useCompatibilityHints: Boolean) =
+            MediaFormat.createVideoFormat(
+                MediaFormat.MIMETYPE_VIDEO_AVC,
+                width,
+                height
+            ).apply {
+                setInteger(
+                    MediaFormat.KEY_COLOR_FORMAT,
+                    MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                )
+                setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
+                setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
+                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, iFrameIntervalSeconds)
+                if (useCompatibilityHints) {
+                    setInteger(
+                        MediaFormat.KEY_PROFILE,
+                        MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline
+                    )
+                    setInteger(
+                        MediaFormat.KEY_BITRATE_MODE,
+                        MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+                    )
+                }
+            }
+        var codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
         stream.codec = codec
         try {
-            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            try {
+                codec.configure(
+                    createFormat(useCompatibilityHints = true),
+                    null,
+                    null,
+                    MediaCodec.CONFIGURE_FLAG_ENCODE
+                )
+            } catch (configurationError: Exception) {
+                try {
+                    codec.release()
+                } catch (_: Exception) {
+                }
+                codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                stream.codec = codec
+                try {
+                    codec.configure(
+                        createFormat(useCompatibilityHints = false),
+                        null,
+                        null,
+                        MediaCodec.CONFIGURE_FLAG_ENCODE
+                    )
+                } catch (fallbackError: Exception) {
+                    fallbackError.addSuppressed(configurationError)
+                    throw fallbackError
+                }
+            }
             stream.surface = codec.createInputSurface()
             codec.start()
         } catch (error: Exception) {
@@ -531,7 +589,9 @@ internal class RtspCameraStreamer(
     }
 
     private fun updateReadyState() {
-        if (streaming && serverReady && cameraReady) emit("live", substreamWarning)
+        if (streaming && serverReady && (!onvifEnabled || onvifReady) && cameraReady) {
+            emit("live", substreamWarning)
+        }
     }
 
     private fun fail(message: String) {
@@ -544,6 +604,9 @@ internal class RtspCameraStreamer(
 
     @Synchronized
     private fun cleanup() {
+        onvifServer?.stop()
+        onvifServer = null
+        onvifReady = false
         server?.stop()
         server = null
         cameraReady = false
@@ -594,6 +657,20 @@ internal class RtspCameraStreamer(
 
     private fun localIpv4Address(): String? {
         try {
+            val connectivityManager =
+                context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val activeNetwork = connectivityManager.activeNetwork
+            if (activeNetwork != null &&
+                connectivityManager.getNetworkCapabilities(activeNetwork)
+                    ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            ) {
+                val wifiAddress = connectivityManager.getLinkProperties(activeNetwork)
+                    ?.linkAddresses
+                    ?.mapNotNull { it.address as? Inet4Address }
+                    ?.firstOrNull { !it.isLoopbackAddress && !it.isLinkLocalAddress }
+                    ?.hostAddress
+                if (wifiAddress != null) return wifiAddress
+            }
             val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
             val addresses = interfaces.toList()
                 .filter { it.isUp && !it.isLoopback }
@@ -793,14 +870,28 @@ private class RtspServer(
         socket.tcpNoDelay = true
         socket.soTimeout = 120_000
         val client = Client(socket)
+        val input = BufferedInputStream(socket.getInputStream())
+        var disconnectReason = "peer closed the connection"
         try {
-            val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.US_ASCII))
             while (running && !socket.isClosed) {
-                val requestLine = reader.readLine() ?: break
+                input.mark(1)
+                val firstByte = input.read()
+                if (firstByte < 0) break
+                input.reset()
+                if (firstByte == '$'.code) {
+                    input.read()
+                    val channel = readByte(input)
+                    val frameLength = (readByte(input) shl 8) or readByte(input)
+                    skipBytes(input, frameLength)
+                    Log.i(TAG, "Received interleaved RTCP/RTP frame on channel $channel.")
+                    continue
+                }
+
+                val requestLine = readAsciiLine(input) ?: break
                 if (requestLine.isBlank()) continue
                 val headers = LinkedHashMap<String, String>()
                 while (true) {
-                    val line = reader.readLine() ?: break
+                    val line = readAsciiLine(input) ?: break
                     if (line.isEmpty()) break
                     val separator = line.indexOf(':')
                     if (separator > 0) {
@@ -808,10 +899,13 @@ private class RtspServer(
                             line.substring(separator + 1).trim()
                     }
                 }
+                Log.i(
+                    TAG,
+                    "Request: $requestLine; Transport=${headers["transport"] ?: "(none)"}; " +
+                        "User-Agent=${headers["user-agent"] ?: "(none)"}"
+                )
                 val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
-                repeat(contentLength) {
-                    if (reader.read() == -1) return
-                }
+                skipBytes(input, contentLength)
 
                 val parts = requestLine.split(' ')
                 if (parts.size < 2) continue
@@ -819,7 +913,6 @@ private class RtspServer(
                 val requestUrl = parts[1]
                 val cseq = headers["cseq"] ?: "1"
                 if (!client.isAuthorized(method, requestUrl, headers["authorization"])) {
-                    Log.i(TAG, "$method rejected: authentication required")
                     client.respond(
                         cseq,
                         401,
@@ -828,7 +921,6 @@ private class RtspServer(
                     )
                     continue
                 }
-                Log.i(TAG, "$method ${pathOf(requestUrl) ?: requestUrl}")
                 when (method) {
                     "OPTIONS" -> client.respond(
                         cseq,
@@ -837,7 +929,13 @@ private class RtspServer(
                         mapOf("Public" to "OPTIONS, DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN, GET_PARAMETER")
                     )
                     "DESCRIBE" -> {
-                        val stream = streamMap[pathOf(requestUrl)]
+                        val requestedPath = pathOf(requestUrl).orEmpty()
+                        val stream = streamMap[requestedPath]
+                            ?: streamMap[if (requestedPath.contains("sub", ignoreCase = true)) {
+                                "/sub"
+                            } else {
+                                "/live"
+                            }]
                         if (stream == null) {
                             client.respond(cseq, 404, "Not Found")
                             continue
@@ -892,8 +990,8 @@ private class RtspServer(
                                     "RTP-Info" to "url=${requestUrl.trimEnd('/')}/trackID=0;seq=${client.sequence}"
                                 )
                             )
-                            client.stream?.requestSyncFrame()
                             client.playing = true
+                            client.stream?.requestSyncFrame()
                         }
                     }
                     "PAUSE" -> {
@@ -910,18 +1008,49 @@ private class RtspServer(
                         client.playing = false
                         clients.remove(client)
                         client.respond(cseq, 200, "OK", mapOf("Session" to client.sessionId))
+                        disconnectReason = "TEARDOWN requested"
                         break
                     }
                     else -> client.respond(cseq, 405, "Method Not Allowed")
                 }
             }
         } catch (error: Exception) {
-            if (running && !socket.isClosed) {
-                Log.w(TAG, "RTSP client connection failed.", error)
-            }
+            disconnectReason = error.message ?: error.javaClass.simpleName
         } finally {
             clients.remove(client)
+            Log.i(TAG, "Client ${socket.inetAddress.hostAddress} disconnected: $disconnectReason")
             client.close()
+        }
+    }
+
+    private fun readAsciiLine(input: BufferedInputStream): String? {
+        val line = ByteArrayOutputStream()
+        while (true) {
+            val value = input.read()
+            if (value < 0) {
+                if (line.size() == 0) return null
+                break
+            }
+            if (value == '\n'.code) break
+            if (value != '\r'.code) line.write(value)
+            if (line.size() > MAX_RTSP_LINE_BYTES) {
+                throw IOException("RTSP request line or header exceeds the size limit.")
+            }
+        }
+        return line.toByteArray().toString(Charsets.US_ASCII)
+    }
+
+    private fun readByte(input: BufferedInputStream): Int =
+        input.read().takeIf { it >= 0 } ?: throw IOException("Incomplete interleaved frame header.")
+
+    private fun skipBytes(input: BufferedInputStream, count: Int) {
+        if (count < 0) throw IOException("Invalid RTSP body length.")
+        var remaining = count
+        val buffer = ByteArray(4096)
+        while (remaining > 0) {
+            val read = input.read(buffer, 0, minOf(buffer.size, remaining))
+            if (read < 0) throw IOException("Incomplete RTSP body or interleaved frame.")
+            remaining -= read
         }
     }
 
@@ -1108,6 +1237,7 @@ private class RtspServer(
             body: String = "",
             extraHeaders: List<Pair<String, String>> = emptyList()
         ) {
+            Log.i(TAG, "Response: RTSP/1.0 $code $reason (CSeq $cseq)")
             val bytes = body.toByteArray(Charsets.US_ASCII)
             val response = buildString {
                 append("RTSP/1.0 $code $reason\r\n")
@@ -1159,6 +1289,7 @@ private class RtspServer(
 
     companion object {
         private const val PORT = 8554
+        private const val MAX_RTSP_LINE_BYTES = 16 * 1024
         private const val REALM = "Phone RTSP"
         private const val TAG = "PhoneRtspServer"
     }
