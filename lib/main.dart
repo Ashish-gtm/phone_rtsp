@@ -93,6 +93,20 @@ class _StreamHomePageState extends State<StreamHomePage> {
       _message = event['message'] as String?;
       _address = event['address'] as String? ?? _address;
       _frontCamera = event['frontCamera'] as bool? ?? _frontCamera;
+      final width = event['width'];
+      final height = event['height'];
+      if (width is int && height is int) {
+        final resolution = '${width}x$height';
+        if (const ['1920x1080', '1280x720', '640x480'].contains(resolution)) {
+          _resolution = resolution;
+        }
+      }
+      final frameRate = event['frameRate'];
+      if (frameRate is int && const [10, 15, 20, 25, 30].contains(frameRate)) {
+        _frameRate = frameRate;
+      }
+      final bitRate = event['bitRate'];
+      if (bitRate is num) _bitrateMbps = bitRate / 1000000;
     });
   }
 
