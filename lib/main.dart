@@ -47,6 +47,7 @@ class _StreamHomePageState extends State<StreamHomePage> {
   bool _frontCamera = false;
   bool _busy = false;
   bool _showPassword = false;
+  bool _settingsLoaded = false;
   String _resolution = '1920x1080';
   int _frameRate = 25;
   double _bitrateMbps = 4;
@@ -75,6 +76,7 @@ class _StreamHomePageState extends State<StreamHomePage> {
         }
       },
     );
+    _loadSettings();
     _refreshStatus();
   }
 
@@ -92,22 +94,88 @@ class _StreamHomePageState extends State<StreamHomePage> {
       _state = event['state'] as String? ?? _state;
       _message = event['message'] as String?;
       _address = event['address'] as String? ?? _address;
-      _frontCamera = event['frontCamera'] as bool? ?? _frontCamera;
-      final width = event['width'];
-      final height = event['height'];
-      if (width is int && height is int) {
-        final resolution = '${width}x$height';
-        if (const ['1920x1080', '1280x720', '640x480'].contains(resolution)) {
-          _resolution = resolution;
+      if (!_settingsLoaded) {
+        _frontCamera = event['frontCamera'] as bool? ?? _frontCamera;
+        final width = event['width'];
+        final height = event['height'];
+        if (width is int && height is int) {
+          final resolution = '${width}x$height';
+          if (const ['1920x1080', '1280x720', '640x480'].contains(resolution)) {
+            _resolution = resolution;
+          }
         }
+        final frameRate = event['frameRate'];
+        if (frameRate is int &&
+            const [10, 15, 20, 25, 30].contains(frameRate)) {
+          _frameRate = frameRate;
+        }
+        final bitRate = event['bitRate'];
+        if (bitRate is num) _bitrateMbps = bitRate / 1000000;
       }
-      final frameRate = event['frameRate'];
-      if (frameRate is int && const [10, 15, 20, 25, 30].contains(frameRate)) {
-        _frameRate = frameRate;
-      }
-      final bitRate = event['bitRate'];
-      if (bitRate is num) _bitrateMbps = bitRate / 1000000;
     });
+  }
+
+  Future<void> _loadSettings() async {
+    try {
+      final settings = await _streamer.invokeMapMethod<String, Object?>(
+        'getSettings',
+      );
+      if (!mounted || settings == null) return;
+      setState(() {
+        _settingsLoaded = true;
+        final width = settings['width'];
+        final height = settings['height'];
+        if (width is int && height is int) {
+          final resolution = '${width}x$height';
+          if (const ['1920x1080', '1280x720', '640x480'].contains(resolution)) {
+            _resolution = resolution;
+          }
+        }
+        final frameRate = settings['frameRate'];
+        if (frameRate is int &&
+            const [10, 15, 20, 25, 30].contains(frameRate)) {
+          _frameRate = frameRate;
+        }
+        final bitRate = settings['bitRate'];
+        if (bitRate is int && bitRate >= 1000000 && bitRate <= 4000000) {
+          _bitrateMbps = bitRate / 1000000;
+        }
+        final frontCamera = settings['frontCamera'];
+        if (frontCamera is bool) _frontCamera = frontCamera;
+        _usernameController.text = settings['username'] as String? ?? '';
+        _passwordController.text = settings['password'] as String? ?? '';
+      });
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _settingsLoaded = true;
+        _message = 'Unable to load saved settings: ${error.message}';
+      });
+    } on MissingPluginException {
+      _settingsLoaded = true;
+    }
+  }
+
+  Future<void> _saveSettings() async {
+    try {
+      await _streamer.invokeMethod<void>('saveSettings', <String, Object>{
+        'width': int.parse(_resolution.split('x').first),
+        'height': int.parse(_resolution.split('x').last),
+        'frameRate': _frameRate,
+        'bitRate': (_bitrateMbps * 1000000).round(),
+        'frontCamera': _frontCamera,
+        'username': _usernameController.text,
+        'password': _passwordController.text,
+      });
+    } on PlatformException catch (error) {
+      if (mounted) {
+        setState(() {
+          _message = 'Unable to save settings: ${error.message}';
+        });
+      }
+    } on MissingPluginException {
+      // Widget tests do not install the native platform channel.
+    }
   }
 
   Future<void> _refreshStatus() async {
@@ -160,6 +228,7 @@ class _StreamHomePageState extends State<StreamHomePage> {
   Future<void> _switchCamera() async {
     if (_busy || _isActive) return;
     setState(() => _frontCamera = !_frontCamera);
+    await _saveSettings();
   }
 
   Future<void> _copyUrl(String url) async {
@@ -397,6 +466,7 @@ class _StreamHomePageState extends State<StreamHomePage> {
                         : (value) {
                             if (value != null) {
                               setState(() => _resolution = value);
+                              _saveSettings();
                             }
                           },
                   ),
@@ -417,6 +487,7 @@ class _StreamHomePageState extends State<StreamHomePage> {
                         : (value) {
                             if (value != null) {
                               setState(() => _frameRate = value);
+                              _saveSettings();
                             }
                           },
                   ),
@@ -444,9 +515,12 @@ class _StreamHomePageState extends State<StreamHomePage> {
                     onChanged: _isActive || _busy
                         ? null
                         : (value) => setState(() => _bitrateMbps = value),
+                    onChangeEnd: _isActive || _busy
+                        ? null
+                        : (_) => _saveSettings(),
                   ),
                   const Text(
-                    'Substream uses an automatic low-bandwidth profile: up to 640 × 480, 10 FPS, 1 Mbps.',
+                    'Substream uses up to 640 × 480 (typically 640 × 360 for 16:9), at the selected frame rate and 1 Mbps.',
                     style: TextStyle(color: Color(0xFF8C9BAD), fontSize: 12),
                   ),
                 ],
@@ -493,6 +567,7 @@ class _StreamHomePageState extends State<StreamHomePage> {
                     enabled: !_isActive && !_busy,
                     textInputAction: TextInputAction.next,
                     autocorrect: false,
+                    onChanged: (_) => _saveSettings(),
                     decoration: InputDecoration(
                       labelText: 'Username',
                       prefixIcon: const Icon(Icons.person_outline_rounded),
@@ -512,6 +587,7 @@ class _StreamHomePageState extends State<StreamHomePage> {
                     autocorrect: false,
                     enableSuggestions: false,
                     textInputAction: TextInputAction.done,
+                    onChanged: (_) => _saveSettings(),
                     decoration: InputDecoration(
                       labelText: 'Password',
                       prefixIcon: const Icon(Icons.key_rounded),

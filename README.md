@@ -8,14 +8,14 @@ Phone RTSP turns an Android phone into a local RTSP camera for an NVR or hybrid 
 - Main stream URL: `rtsp://<phone-LAN-IP>:8554/live`
 - Substream URL: `rtsp://<phone-LAN-IP>:8554/sub`
 - Main video: H.264; resolution selectable from 1920 × 1080, 1280 × 720, or 640 × 480; 10, 15, 20, 25, or 30 fps; 1–4 Mbps
-- Substream video: H.264; automatically uses a lower resolution (up to 640 × 480) while preserving the main stream's aspect ratio, 10 fps, and 1 Mbps
+- Substream video: H.264; automatically uses a lower resolution (up to 640 × 480; typically 640 × 360 for a 16:9 main stream) while preserving the main stream's aspect ratio, at the selected frame rate and 1 Mbps
 - RTP transport: UDP or RTSP interleaved TCP
 - Multiple simultaneous sessions on each path share that path's encoder
 - Audio: not included
 
 ## Optional RTSP credentials
 
-Set both a username and password in the app before starting the stream to require recorder authentication. The RTSP server accepts Digest MD5 and Basic authentication for recorder compatibility. If both fields are blank, no authentication is required. Credentials are kept in app memory and are not saved. RTSP does not encrypt the video or connection; Basic authentication also sends a reversible encoding of the password. Use this only on a trusted LAN.
+Set both a username and password in the app before starting the stream to require recorder authentication. The RTSP server accepts Digest MD5 and Basic authentication for recorder compatibility. If both fields are blank, no authentication is required. Stream settings and credentials are saved on the device; the password is encrypted using Android Keystore. RTSP does not encrypt the video or connection; Basic authentication also sends a reversible encoding of the password. Use this only on a trusted LAN.
 
 ## Use
 

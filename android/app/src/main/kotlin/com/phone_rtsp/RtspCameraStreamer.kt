@@ -842,10 +842,6 @@ private class RtspServer(
     private val clients = CopyOnWriteArraySet<Client>()
     private val streamMap = java.util.concurrent.ConcurrentHashMap(streams)
     private var serverThread: Thread? = null
-    private val nonce = ByteArray(24).apply { SecureRandom().nextBytes(this) }.let {
-        Base64.encodeToString(it, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-    }
-    private val highestNonceCounts = HashMap<String, Long>()
 
     fun start() {
         running = true
@@ -1042,7 +1038,7 @@ private class RtspServer(
                         cseq,
                         401,
                         "Unauthorized",
-                        extraHeaders = challengeHeaders()
+                        extraHeaders = challengeHeaders(client.nonce)
                     )
                     continue
                 }
@@ -1179,7 +1175,7 @@ private class RtspServer(
         }
     }
 
-    private fun challengeHeaders(): List<Pair<String, String>> {
+    private fun challengeHeaders(nonce: String): List<Pair<String, String>> {
         if (username.isEmpty()) return emptyList()
         return listOf(
             "WWW-Authenticate" to
@@ -1188,7 +1184,13 @@ private class RtspServer(
         )
     }
 
-    private fun authorize(authorization: String?, method: String, requestUrl: String): Boolean {
+    private fun authorize(
+        authorization: String?,
+        method: String,
+        requestUrl: String,
+        nonce: String,
+        highestNonceCounts: MutableMap<String, Long>
+    ): Boolean {
         if (username.isEmpty()) return true
         if (authorization == null) return false
 
@@ -1213,10 +1215,11 @@ private class RtspServer(
 
         if (!authorization.startsWith("Digest ", ignoreCase = true)) return false
         val values = parseDigestAuthorization(authorization.substringAfter(' '))
+        val digestUri = values["uri"] ?: return false
         if (values["username"] != username ||
             values["realm"] != REALM ||
             values["nonce"] != nonce ||
-            values["uri"] != requestUrl ||
+            !digestUriMatches(requestUrl, digestUri) ||
             !values["algorithm"].orEmpty().equals("MD5", ignoreCase = true) &&
                 values.containsKey("algorithm")
         ) {
@@ -1226,7 +1229,7 @@ private class RtspServer(
         val suppliedResponse = values["response"] ?: return false
         val qop = values["qop"]
         val a1 = md5Hex("$username:$REALM:$password")
-        val a2 = md5Hex("$method:$requestUrl")
+        val a2 = md5Hex("$method:$digestUri")
         val expected = if (qop.equals("auth", ignoreCase = true)) {
             val nonceCount = values["nc"] ?: return false
             val clientNonce = values["cnonce"] ?: return false
@@ -1255,6 +1258,35 @@ private class RtspServer(
         }
         return true
     }
+
+    private fun digestUriMatches(requestUrl: String, digestUri: String): Boolean {
+        if (requestUrl == digestUri) return true
+        val request = try {
+            URI(requestUrl)
+        } catch (_: Exception) {
+            return false
+        }
+        val digest = try {
+            URI(digestUri)
+        } catch (_: Exception) {
+            return false
+        }
+        val requestPath = request.path.trimEnd('/')
+        val digestPath = digest.path.trimEnd('/')
+        val pathsMatch = requestPath == digestPath ||
+            requestPath == "$digestPath/trackID=0"
+        if (!pathsMatch || request.query != digest.query) return false
+        if (!digest.isAbsolute) return digest.rawAuthority == null
+        return request.isAbsolute &&
+            request.scheme.equals(digest.scheme, ignoreCase = true) &&
+            request.host.equals(digest.host, ignoreCase = true) &&
+            request.port == digest.port
+    }
+
+    private fun newNonce(): String =
+        ByteArray(24).apply { SecureRandom().nextBytes(this) }.let {
+            Base64.encodeToString(it, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        }
 
     private fun parseDigestAuthorization(value: String): Map<String, String> {
         val result = HashMap<String, String>()
@@ -1303,6 +1335,8 @@ private class RtspServer(
     private inner class Client(private val socket: Socket) {
         private val output = socket.getOutputStream()
         private val writeLock = Any()
+        val nonce = newNonce()
+        private val highestNonceCounts = HashMap<String, Long>()
         private var tcpTransport = false
         private var rtpChannel = 0
         private var rtpSocket: DatagramSocket? = null
@@ -1319,7 +1353,7 @@ private class RtspServer(
         val sequence: Int get() = sequenceNumber
 
         fun isAuthorized(method: String, requestUrl: String, authorization: String?): Boolean =
-            authorize(authorization, method, requestUrl)
+            authorize(authorization, method, requestUrl, nonce, highestNonceCounts)
 
         fun setup(transport: String): Boolean {
             if (transport.contains("RTP/AVP/TCP", ignoreCase = true)) {

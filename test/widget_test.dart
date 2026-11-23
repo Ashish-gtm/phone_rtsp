@@ -18,6 +18,12 @@ void main() {
     expect(find.text('Resolution'), findsOneWidget);
     expect(find.text('Frame rate'), findsOneWidget);
     expect(find.text('4 Mbps'), findsOneWidget);
+    expect(
+      find.text(
+        'Substream uses up to 640 × 480 (typically 640 × 360 for 16:9), at the selected frame rate and 1 Mbps.',
+      ),
+      findsOneWidget,
+    );
     await tester.scrollUntilVisible(
       find.text('RTSP LOGIN'),
       300,
