@@ -8,7 +8,7 @@ Phone RTSP turns an Android phone into a local RTSP camera for an NVR or hybrid 
 - Main stream URL: `rtsp://<phone-LAN-IP>:8554/live`
 - Substream URL: `rtsp://<phone-LAN-IP>:8554/sub`
 - Main video: H.264; resolution selectable from 1920 × 1080, 1280 × 720, or 640 × 480; 10, 15, 20, 25, or 30 fps; 1–4 Mbps
-- Substream video: H.264; automatically uses a lower supported camera resolution (up to 640 × 480), 10 fps, and 1 Mbps
+- Substream video: H.264; automatically uses a lower resolution (up to 640 × 480) while preserving the main stream's aspect ratio, 10 fps, and 1 Mbps
 - RTP transport: UDP or RTSP interleaved TCP
 - Multiple simultaneous sessions on each path share that path's encoder
 - Audio: not included

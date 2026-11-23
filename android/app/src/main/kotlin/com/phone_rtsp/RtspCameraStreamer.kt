@@ -20,6 +20,7 @@ import android.os.HandlerThread
 import android.util.Base64
 import android.util.Log
 import android.util.Range
+import android.util.Size
 import android.view.Surface
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
@@ -215,10 +216,7 @@ internal class RtspCameraStreamer(
                     SUB_ASPECT_RATIO_TOLERANCE
             }
             .maxByOrNull { it.width * it.height }
-            ?: supportedSizes
-                .filter { it.width <= SUB_MAX_WIDTH && it.height <= SUB_MAX_HEIGHT }
-                .filter { it.width * it.height < size.width * size.height }
-                .maxByOrNull { it.width * it.height }
+            ?: scaledSubstreamSize(size)
 
         val mainStream = createEncoder(
             "/live",
@@ -353,6 +351,21 @@ internal class RtspCameraStreamer(
             throw error
         }
         return stream
+    }
+
+    private fun scaledSubstreamSize(mainSize: Size): Size {
+        val scale = minOf(
+            SUB_MAX_WIDTH.toDouble() / mainSize.width,
+            SUB_MAX_HEIGHT.toDouble() / mainSize.height,
+            if (mainSize.width <= SUB_MAX_WIDTH && mainSize.height <= SUB_MAX_HEIGHT) {
+                0.75
+            } else {
+                1.0
+            }
+        )
+        val width = maxOf(2, (mainSize.width * scale).toInt() / 2 * 2)
+        val height = maxOf(2, (mainSize.height * scale).toInt() / 2 * 2)
+        return Size(width, height)
     }
 
     private fun findCameraId(): String {
