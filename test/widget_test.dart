@@ -32,6 +32,19 @@ void main() {
     expect(find.text('RTSP LOGIN'), findsOneWidget);
     expect(find.text('Username'), findsOneWidget);
     expect(find.text('Password'), findsOneWidget);
+    await tester.ensureVisible(find.byType(SwitchListTile));
+    await tester.pumpAndSettle();
+    expect(find.text('ONVIF'), findsOneWidget);
+    expect(
+      tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+      isFalse,
+    );
+    await tester.tap(find.byType(SwitchListTile));
+    await tester.pump();
+    expect(
+      tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+      isTrue,
+    );
     await tester.scrollUntilVisible(
       find.text('Start streaming'),
       300,
@@ -41,6 +54,5 @@ void main() {
     expect(find.text('RTSP ADDRESSES'), findsOneWidget);
     expect(find.text('Main stream'), findsOneWidget);
     expect(find.text('Substream'), findsOneWidget);
-    expect(find.text('ONVIF'), findsNothing);
   });
 }

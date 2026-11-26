@@ -17,15 +17,20 @@ Phone RTSP turns an Android phone into a local RTSP camera for an NVR or hybrid 
 
 Set both a username and password in the app before starting the stream to require recorder authentication. The RTSP server accepts Digest MD5 and Basic authentication for recorder compatibility. If both fields are blank, no authentication is required. Stream settings and credentials are saved on the device; the password is encrypted using Android Keystore. RTSP does not encrypt the video or connection; Basic authentication also sends a reversible encoding of the password. Use this only on a trusted LAN.
 
+## Optional ONVIF
+
+Enable the **ONVIF** switch below the RTSP credentials to make the camera discoverable by ONVIF-compatible recorders while streaming. ONVIF WS-Discovery listens on UDP port `3702`, and its device/media services use HTTP port `8000`; stream profiles return the RTSP `/live` and `/sub` URLs. When RTSP credentials are set in the app, ONVIF device/media requests also require those credentials using WS-Security UsernameToken or HTTP Basic/Digest authentication; device time sync is left open so recorders can establish the correct token time. Enter the same credentials in the DVR's ONVIF configuration, and in its RTSP settings if requested. Discovery itself remains unauthenticated so recorders can find the camera. The ONVIF service uses unencrypted HTTP, is off by default, and stops with the stream; use it only on a trusted LAN.
+
 ## Use
 
 1. Connect the phone and recorder to the same local network.
 2. Optionally enter a username and password to protect the RTSP stream.
-3. Open the app and select the front or rear camera.
-4. Choose the main stream resolution, frame rate, and bitrate. These settings apply after restarting the stream.
-5. Tap **Start streaming** and allow camera access.
-6. Configure `.../live` as the DVR main stream and `.../sub` as its substream. If authentication is enabled, enter the same username and password for both.
-7. Use **Stop streaming** when finished.
+3. Optionally enable ONVIF for recorder discovery and profile configuration.
+4. Open the app and select the front or rear camera.
+5. Choose the main stream resolution, frame rate, and bitrate. These settings apply after restarting the stream.
+6. Tap **Start streaming** and allow camera access.
+7. Configure `.../live` as the DVR main stream and `.../sub` as its substream. If authentication is enabled, use the same username and password for ONVIF and RTSP when the DVR requests them.
+8. Use **Stop streaming** when finished.
 
 Keep the app open while streaming. The selected phone camera must support the chosen main resolution and a smaller output for the substream. The actual frame rate depends on camera and device capabilities. The phone and recorder network must permit RTSP traffic on TCP port 8554 and the corresponding RTP transport.
 

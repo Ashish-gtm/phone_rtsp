@@ -79,6 +79,7 @@ internal class RtspCameraStreamer(
     @Volatile private var cameraReady = false
     @Volatile private var lastError: String? = null
     @Volatile private var substreamWarning: String? = null
+    @Volatile private var onvifWarning: String? = null
     @Volatile private var mainWidth = DEFAULT_WIDTH
     @Volatile private var mainHeight = DEFAULT_HEIGHT
     @Volatile private var mainFrameRate = DEFAULT_FRAME_RATE
@@ -91,6 +92,7 @@ internal class RtspCameraStreamer(
     private var streams = emptyList<EncodedStream>()
     private var overlayRenderer: OverlayRenderer? = null
     private var server: RtspServer? = null
+    private var onvifServer: OnvifServer? = null
 
     @Synchronized
     fun start(
@@ -100,7 +102,8 @@ internal class RtspCameraStreamer(
         width: Int,
         height: Int,
         frameRate: Int,
-        bitRate: Int
+        bitRate: Int,
+        onvifEnabled: Boolean
     ) {
         if (streaming) return
         require((width to height) in SUPPORTED_MAIN_SIZES) {
@@ -122,6 +125,7 @@ internal class RtspCameraStreamer(
         cameraReady = false
         lastError = null
         substreamWarning = null
+        onvifWarning = null
         emit("starting")
 
         try {
@@ -141,6 +145,30 @@ internal class RtspCameraStreamer(
                 username = username,
                 password = password,
             ).also { it.start() }
+            if (onvifEnabled) {
+                try {
+                    onvifServer = OnvifServer(
+                        context = context,
+                        addressProvider = ::localIpv4Address,
+                        streams = streams.associateBy { it.path },
+                        username = username,
+                        password = password,
+                        onFailure = { message ->
+                            if (streaming) {
+                                onvifWarning = "ONVIF is unavailable: $message"
+                                emit(
+                                    if (serverReady && cameraReady) "live" else "starting",
+                                    statusMessage()
+                                )
+                            }
+                        }
+                    ).also { it.start() }
+                } catch (error: Exception) {
+                    onvifWarning =
+                        "ONVIF is unavailable: ${error.message ?: "Unable to initialize the service."}"
+                    Log.w(TAG, "Unable to initialize optional ONVIF support.", error)
+                }
+            }
             openCamera()
         } catch (error: Exception) {
             cleanup()
@@ -167,7 +195,7 @@ internal class RtspCameraStreamer(
             serverReady && cameraReady -> "live"
             else -> "starting"
         },
-        "message" to (lastError ?: substreamWarning),
+        "message" to (lastError ?: statusMessage()),
         "address" to localIpv4Address(),
         "frontCamera" to frontCamera,
         "width" to mainWidth,
@@ -716,7 +744,7 @@ internal class RtspCameraStreamer(
     }
 
     private fun updateReadyState() {
-        if (streaming && serverReady && cameraReady) emit("live", substreamWarning)
+        if (streaming && serverReady && cameraReady) emit("live", statusMessage())
     }
 
     private fun fail(message: String) {
@@ -729,6 +757,8 @@ internal class RtspCameraStreamer(
 
     @Synchronized
     private fun cleanup() {
+        onvifServer?.stop()
+        onvifServer = null
         server?.stop()
         server = null
         cameraReady = false
@@ -776,6 +806,9 @@ internal class RtspCameraStreamer(
     private fun emit(state: String, message: String? = null) {
         onState(state, message)
     }
+
+    private fun statusMessage(): String? =
+        listOfNotNull(substreamWarning, onvifWarning).joinToString(" ").ifEmpty { null }
 
     private fun cameraManager() = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
 

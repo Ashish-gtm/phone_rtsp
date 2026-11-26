@@ -44,6 +44,7 @@ class MainActivity : FlutterActivity() {
         val height: Int,
         val frameRate: Int,
         val bitRate: Int,
+        val onvifEnabled: Boolean,
         val result: MethodChannel.Result
     )
 
@@ -140,6 +141,7 @@ class MainActivity : FlutterActivity() {
                             call.argument<Int>("height") ?: 1080,
                             call.argument<Int>("frameRate") ?: 25,
                             call.argument<Int>("bitRate") ?: 4_000_000,
+                            call.argument<Boolean>("onvifEnabled") ?: false,
                             result
                         )
                     )
@@ -225,6 +227,7 @@ class MainActivity : FlutterActivity() {
                 .putExtra(StreamService.EXTRA_HEIGHT, request.height)
                 .putExtra(StreamService.EXTRA_FRAME_RATE, request.frameRate)
                 .putExtra(StreamService.EXTRA_BIT_RATE, request.bitRate)
+                .putExtra(StreamService.EXTRA_ONVIF_ENABLED, request.onvifEnabled)
             ContextCompat.startForegroundService(this, intent)
             request.result.success(null)
         } catch (error: Exception) {
@@ -284,6 +287,7 @@ class MainActivity : FlutterActivity() {
                 "frameRate" to json.optInt("frameRate", DEFAULT_FRAME_RATE),
                 "bitRate" to json.optInt("bitRate", DEFAULT_BIT_RATE),
                 "frontCamera" to json.optBoolean("frontCamera", false),
+                "onvifEnabled" to json.optBoolean("onvifEnabled", false),
                 "username" to json.optString("username", ""),
                 "password" to decryptPassword(json.optString("encryptedPassword", ""))
             )
@@ -295,6 +299,7 @@ class MainActivity : FlutterActivity() {
                 "frameRate" to status["frameRate"],
                 "bitRate" to status["bitRate"],
                 "frontCamera" to status["frontCamera"],
+                "onvifEnabled" to false,
                 "username" to "",
                 "password" to ""
             )
@@ -323,6 +328,7 @@ class MainActivity : FlutterActivity() {
             .put("frameRate", frameRate)
             .put("bitRate", bitRate)
             .put("frontCamera", settings["frontCamera"] as? Boolean ?: false)
+            .put("onvifEnabled", settings["onvifEnabled"] as? Boolean ?: false)
             .put("username", username)
             .put("encryptedPassword", encryptPassword(password))
         getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)

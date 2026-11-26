@@ -48,6 +48,7 @@ class _StreamHomePageState extends State<StreamHomePage> {
   bool _busy = false;
   bool _showPassword = false;
   bool _settingsLoaded = false;
+  bool _onvifEnabled = false;
   String _resolution = '1920x1080';
   int _frameRate = 25;
   double _bitrateMbps = 4;
@@ -142,6 +143,8 @@ class _StreamHomePageState extends State<StreamHomePage> {
         }
         final frontCamera = settings['frontCamera'];
         if (frontCamera is bool) _frontCamera = frontCamera;
+        final onvifEnabled = settings['onvifEnabled'];
+        if (onvifEnabled is bool) _onvifEnabled = onvifEnabled;
         _usernameController.text = settings['username'] as String? ?? '';
         _passwordController.text = settings['password'] as String? ?? '';
       });
@@ -164,6 +167,7 @@ class _StreamHomePageState extends State<StreamHomePage> {
         'frameRate': _frameRate,
         'bitRate': (_bitrateMbps * 1000000).round(),
         'frontCamera': _frontCamera,
+        'onvifEnabled': _onvifEnabled,
         'username': _usernameController.text,
         'password': _passwordController.text,
       });
@@ -204,6 +208,7 @@ class _StreamHomePageState extends State<StreamHomePage> {
       } else {
         await _streamer.invokeMethod<void>('start', <String, Object>{
           'frontCamera': _frontCamera,
+          'onvifEnabled': _onvifEnabled,
           'username': _usernameController.text.trim(),
           'password': _passwordController.text,
           'width': int.parse(_resolution.split('x').first),
@@ -228,6 +233,12 @@ class _StreamHomePageState extends State<StreamHomePage> {
   Future<void> _switchCamera() async {
     if (_busy || _isActive) return;
     setState(() => _frontCamera = !_frontCamera);
+    await _saveSettings();
+  }
+
+  Future<void> _setOnvifEnabled(bool enabled) async {
+    if (_isActive || _busy) return;
+    setState(() => _onvifEnabled = enabled);
     await _saveSettings();
   }
 
@@ -609,6 +620,26 @@ class _StreamHomePageState extends State<StreamHomePage> {
                         borderRadius: BorderRadius.circular(14),
                         borderSide: BorderSide.none,
                       ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Material(
+                    color: Colors.transparent,
+                    child: SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text(
+                        'ONVIF',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: const Text(
+                        'Allow ONVIF discovery and camera profile access while streaming.',
+                        style: TextStyle(
+                          color: Color(0xFF8C9BAD),
+                          fontSize: 12,
+                        ),
+                      ),
+                      value: _onvifEnabled,
+                      onChanged: _isActive || _busy ? null : _setOnvifEnabled,
                     ),
                   ),
                 ],

@@ -79,7 +79,8 @@ internal class StreamService : Service() {
                         intent.getIntExtra(EXTRA_WIDTH, DEFAULT_WIDTH),
                         intent.getIntExtra(EXTRA_HEIGHT, DEFAULT_HEIGHT),
                         intent.getIntExtra(EXTRA_FRAME_RATE, DEFAULT_FRAME_RATE),
-                        intent.getIntExtra(EXTRA_BIT_RATE, DEFAULT_BIT_RATE)
+                        intent.getIntExtra(EXTRA_BIT_RATE, DEFAULT_BIT_RATE),
+                        intent.getBooleanExtra(EXTRA_ONVIF_ENABLED, false)
                     )
                 } catch (error: Exception) {
                     Log.e(TAG, "Unable to start camera streaming.", error)
@@ -328,6 +329,7 @@ internal class StreamService : Service() {
         const val EXTRA_HEIGHT = "height"
         const val EXTRA_FRAME_RATE = "frameRate"
         const val EXTRA_BIT_RATE = "bitRate"
+        const val EXTRA_ONVIF_ENABLED = "onvifEnabled"
 
         private const val TAG = "PhoneRtspStreamer"
         private const val CHANNEL_ID = "phone_rtsp_stream"
